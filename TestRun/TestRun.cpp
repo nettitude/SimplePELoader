@@ -28,12 +28,14 @@ OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED O
 THE POSSIBILITY OF SUCH DAMAGE.
 */
 #include <Windows.h>
+#include <winnt.h>
 #include <conio.h>
 #include <string>
 #include <iostream>
 #include "Loader.h"
 
 typedef VOID(*TestFunction)();
+
 
 int main(int argc, char** argv)
 {
@@ -45,6 +47,10 @@ int main(int argc, char** argv)
     funTab.fnLoadLibraryA = &LoadLibraryA;
     funTab.fnVirtualAlloc = &VirtualAlloc;
     funTab.fnVirtualFree = &VirtualFree;
+
+#if defined(_WIN64)
+    funTab.fnRtlAddFunctionTable = &RtlAddFunctionTable;
+#endif
 
     LOADED_MODULE loadedModule = { 0 };
 
@@ -90,6 +96,19 @@ int main(int argc, char** argv)
                     if (ERROR_SUCCESS == status)
                     {
                         std::cout << "Module loaded OK" << std::endl;
+
+#if defined(_WIN64)
+                        status = Loader_RegisterExceptionTable(&funTab, &loadedModule);
+
+                        if (ERROR_SUCCESS == status )
+                        {
+                            std::cout << "Exception table registered OK" << std::endl;
+                        }
+                        else
+                        {
+                            std::cout << "Failed to register exception table, error:" << status << std::endl;
+                        }
+#endif                   
                     }
                     else
                     {
@@ -125,6 +144,7 @@ int main(int argc, char** argv)
     {
         //call DLL Main
         loadedModule.pEntryPoint(loadedModule.hModule, DLL_PROCESS_ATTACH, NULL);
+
 
         //get by name
         TestFunction test0 = (TestFunction)Loader_GetProcAddress(&loadedModule, "TestFunction0");

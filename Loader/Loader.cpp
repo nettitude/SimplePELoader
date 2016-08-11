@@ -224,36 +224,47 @@ static CONST IMAGE_SECTION_HEADER* ResolveVAToSection(IMAGE_INFO& Image,
 
 template <typename T_Type>
 __inline T_Type GetImageDirectory(IMAGE_INFO& Image,
-                         ImageDirectory::Enum Entry)
+                                  ImageDirectory::Enum Entry,
+                                  CONST IMAGE_DATA_DIRECTORY** pOutDir = NULL )
 {
     DEBUG_ASSERT(Image.ImageBase);
     DEBUG_ASSERT(Image.ImageNTHeaders);
 
     if (Image.ImageNTHeaders)
     {
-
         CONST IMAGE_DATA_DIRECTORY* pDir = &(Image.ImageNTHeaders->OptionalHeader.DataDirectory[Entry]);
+        DEBUG_ASSERT(pDir);
 
-        if (Image.Flags & IMAGE_INFO::IMAGE_FLAG_FILE)
+        if (pDir)
         {
-            CONST IMAGE_SECTION_HEADER* pSection = ResolveVAToSection(Image, pDir->VirtualAddress);
-
-            if (pSection)
+            if (pOutDir)
             {
-                //in a file we need to use the RVA
-                return reinterpret_cast<T_Type>((UINT_PTR)pSection->PointerToRawData + (UINT_PTR)Image.ImageBase);
+                *pOutDir = pDir;
+            }
+
+            if (Image.Flags & IMAGE_INFO::IMAGE_FLAG_FILE)
+            {
+                CONST IMAGE_SECTION_HEADER* pSection = ResolveVAToSection(Image, pDir->VirtualAddress);
+
+                if (pSection)
+                {
+                    //in a file we need to use the RVA
+                    return reinterpret_cast<T_Type>((UINT_PTR)pSection->PointerToRawData + (UINT_PTR)Image.ImageBase);
+                }
+            }
+            else if (pDir->Size &&
+                pDir->VirtualAddress)
+            {
+                //the actual VA will be ok
+                return reinterpret_cast<T_Type>((UINT_PTR)pDir->VirtualAddress + (UINT_PTR)Image.ImageBase);
             }
         }
-        else
-        {
-            //the actual VA will be ok
-            return reinterpret_cast<T_Type>((UINT_PTR)pDir->VirtualAddress + (UINT_PTR)Image.ImageBase);
-        }
-
     }
 
     return NULL;
 }
+
+
 
 //do not use for overlapped regions
 static void Loader_CopyMemory(LPVOID pDest, LPCVOID pSrc, SIZE_T cbCopy)
@@ -275,204 +286,165 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
     LOADED_MODULE*               pResult)
 {
 
+    DEBUG_ASSERT(pFunTable);
+    DEBUG_ASSERT(pFunTable->fnGetModuleHandleA);
+    DEBUG_ASSERT(pFunTable->fnGetProcAddress);
+    DEBUG_ASSERT(pFunTable->fnLoadLibraryA);
+    DEBUG_ASSERT(pFunTable->fnVirtualAlloc);
+    DEBUG_ASSERT(pFunTable->fnVirtualFree);
+
     DWORD dwStatus = ERROR_INVALID_PARAMETER;
 
-    if (pResult)
+
+    if (pFunTable &&
+        pFunTable->fnGetModuleHandleA &&
+        pFunTable->fnGetProcAddress &&
+        pFunTable->fnLoadLibraryA &&
+        pFunTable->fnVirtualAlloc &&
+        pFunTable->fnVirtualFree)
     {
-        pResult->pNTHeaders = NULL;
-        pResult->hModule = NULL;
 
-        IMAGE_INFO RawImage;
-        IMAGE_INFO LoadedImage;
-        
-        dwStatus = IMAGE_INFO::Initialise(RawImage, (LPVOID)pBuffer, cbBuffer, IMAGE_INFO::IMAGE_FLAG_FILE);
-
-        if (ERROR_SUCCESS == dwStatus)
+        if (pResult)
         {
-            pResult->hModule = (HMODULE)VirtualAlloc(NULL,
-                                                     RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
-                                                     MEM_RESERVE | MEM_COMMIT,
-                                                     PAGE_EXECUTE_READWRITE);
+            pResult->pNTHeaders = NULL;
+            pResult->hModule = NULL;
 
-            if (pResult->hModule)
+            IMAGE_INFO RawImage;
+            IMAGE_INFO LoadedImage;
+
+            dwStatus = IMAGE_INFO::Initialise(RawImage, (LPVOID)pBuffer, cbBuffer, IMAGE_INFO::IMAGE_FLAG_FILE);
+
+            if (ERROR_SUCCESS == dwStatus)
             {
-                dwStatus = ERROR_SUCCESS;
+                pResult->hModule = (HMODULE)VirtualAlloc(NULL,
+                                                         RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
+                                                         MEM_RESERVE | MEM_COMMIT,
+                                                         PAGE_EXECUTE_READWRITE);
 
-                //Copy headers
-                Loader_CopyMemory(pResult->hModule,
-                    pBuffer,
-                    RawImage.ImageNTHeaders->OptionalHeader.SizeOfHeaders);
-
-                //Copy each section
-                CONST IMAGE_SECTION_HEADER* pFirst = IMAGE_FIRST_SECTION(RawImage.ImageNTHeaders);
-
-                if (pFirst)
+                if (pResult->hModule)
                 {
-                    CONST DWORD dwNumSection = RawImage.ImageNTHeaders->FileHeader.NumberOfSections;
+                    dwStatus = ERROR_SUCCESS;
 
-                    for (DWORD dwCurrent = 0; dwCurrent < dwNumSection; ++dwCurrent)
+                    //Copy headers
+                    Loader_CopyMemory(pResult->hModule,
+                        pBuffer,
+                        RawImage.ImageNTHeaders->OptionalHeader.SizeOfHeaders);
+
+                    //Copy each section
+                    CONST IMAGE_SECTION_HEADER* pFirst = IMAGE_FIRST_SECTION(RawImage.ImageNTHeaders);
+
+                    if (pFirst)
                     {
-                        CONST IMAGE_SECTION_HEADER* pCurrent = &pFirst[dwCurrent];
-                        LPVOID pDest = (LPVOID)((UINT_PTR)pResult->hModule + pCurrent->VirtualAddress);
-                        LPCVOID pSrc = (LPCVOID)((UINT_PTR)RawImage.ImageBase + pCurrent->PointerToRawData);
+                        CONST DWORD dwNumSection = RawImage.ImageNTHeaders->FileHeader.NumberOfSections;
 
-                        DWORD SectionSize = pCurrent->SizeOfRawData;
-
-                        if (SectionSize == 0)
+                        for (DWORD dwCurrent = 0; dwCurrent < dwNumSection; ++dwCurrent)
                         {
-                            if (pCurrent->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)
+                            CONST IMAGE_SECTION_HEADER* pCurrent = &pFirst[dwCurrent];
+                            LPVOID pDest = (LPVOID)((UINT_PTR)pResult->hModule + pCurrent->VirtualAddress);
+                            LPCVOID pSrc = (LPCVOID)((UINT_PTR)RawImage.ImageBase + pCurrent->PointerToRawData);
+
+                            DWORD SectionSize = pCurrent->SizeOfRawData;
+
+                            if (SectionSize == 0)
                             {
-                                SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfInitializedData;
-                            }
-                            else if (pCurrent->Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA)
-                            {
-                                SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfUninitializedData;
-                            }
-                            else
-                            {
-                                continue;
-                            }
-                        }
-
-                        Loader_CopyMemory(pDest,
-                                          pSrc,
-                                          SectionSize);
-
-                    }
-                }
-                else
-                {
-                    dwStatus = ERROR_INVALID_DATA;
-
-                }
-
-                //now use the mapped version
-                dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage, 0);
-
-
-                //Load imports
-                if (dwStatus == ERROR_SUCCESS)
-                {
-                   
-                    CONST IMAGE_IMPORT_DESCRIPTOR* pDescriptor = GetImageDirectory< CONST IMAGE_IMPORT_DESCRIPTOR* >(LoadedImage, ImageDirectory::ENTRY_IMPORT);
-
-                    if (pDescriptor)
-                    {
-
-                        //the final descriptor is a blank entry
-                        while (pDescriptor->Name != NULL &&
-                               dwStatus == ERROR_SUCCESS)
-                        {
-
-                            LPCSTR szLibraryName = (LPCSTR)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->Name);
-                            HMODULE hLib = pFunTable->fnLoadLibraryA(szLibraryName);
-
-                            if (hLib)
-                            {
-                                PIMAGE_THUNK_DATA pThunk = NULL;
-                                PIMAGE_THUNK_DATA pAddrThunk = NULL;
-
-                                if (pDescriptor->OriginalFirstThunk)
+                                if (pCurrent->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)
                                 {
-                                    pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->OriginalFirstThunk);
+                                    SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfInitializedData;
+                                }
+                                else if (pCurrent->Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA)
+                                {
+                                    SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfUninitializedData;
                                 }
                                 else
                                 {
-                                    pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
-                                }
-
-                                pAddrThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
-                                
-                                while (pAddrThunk &&
-                                       pThunk &&
-                                       pThunk->u1.AddressOfData && 
-                                       dwStatus == ERROR_SUCCESS)
-                                {
-                                    if (IMAGE_SNAP_BY_ORDINAL(pThunk->u1.Ordinal))
-                                    {
-                                        LPCSTR Ordinal = (LPCSTR)IMAGE_ORDINAL(pAddrThunk->u1.Ordinal);
-#if defined(_WIN64)
-                                        pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, Ordinal);
-#else
-                                        pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, Ordinal);
-#endif
-                                    }
-                                    else
-                                    {
-                                        PIMAGE_IMPORT_BY_NAME pImport = (PIMAGE_IMPORT_BY_NAME)((UINT_PTR)LoadedImage.ImageBase + pThunk->u1.AddressOfData);
-
-#if defined(_WIN64)
-                                        pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, pImport->Name);
-#else
-                                        pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, pImport->Name);
-#endif
-                                    }
-
-                                    ++pThunk;
-                                    ++pAddrThunk;
+                                    continue;
                                 }
                             }
-                            else
-                            {
-                                dwStatus = ERROR_MOD_NOT_FOUND;
-                            }
 
-                            pDescriptor++;
+                            Loader_CopyMemory(pDest,
+                                pSrc,
+                                SectionSize);
+
                         }
                     }
                     else
                     {
                         dwStatus = ERROR_INVALID_DATA;
+
                     }
-                }
 
-                //fix up relocations
-                if (dwStatus == ERROR_SUCCESS)
-                {
-                    CONST DWORD Size = LoadedImage.ImageNTHeaders->OptionalHeader.DataDirectory[ImageDirectory::ENTRY_BASERELOC].Size;
+                    //now use the mapped version
+                    dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage, 0);
 
-                    if (Size > 0)
+
+                    //Load imports
+                    if (dwStatus == ERROR_SUCCESS)
                     {
-                        CONST IMAGE_BASE_RELOCATION* pRelocTable = GetImageDirectory< CONST IMAGE_BASE_RELOCATION* >(LoadedImage, ImageDirectory::ENTRY_BASERELOC);
 
-                        if (pRelocTable)
+                        CONST IMAGE_IMPORT_DESCRIPTOR* pDescriptor = GetImageDirectory< CONST IMAGE_IMPORT_DESCRIPTOR* >(LoadedImage, ImageDirectory::ENTRY_IMPORT);
+
+                        if (pDescriptor)
                         {
-                            //last entry is empty
-                            while (pRelocTable->SizeOfBlock)
+
+                            //the final descriptor is a blank entry
+                            while (pDescriptor->Name != NULL &&
+                                dwStatus == ERROR_SUCCESS)
                             {
 
-                                CONST DWORD CountRelocs = (pRelocTable->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(RELOCATION);
+                                LPCSTR szLibraryName = (LPCSTR)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->Name);
+                                HMODULE hLib = pFunTable->fnLoadLibraryA(szLibraryName);
 
-                                if (CountRelocs)
+                                if (hLib)
                                 {
-                                    //relocations follow the header
-                                    RELOCATION* pReloc = (RELOCATION*)(pRelocTable + 1);
-                                    CONST UINT_PTR Difference = ((UINT_PTR)LoadedImage.ImageBase - LoadedImage.ImageNTHeaders->OptionalHeader.ImageBase);
+                                    PIMAGE_THUNK_DATA pThunk = NULL;
+                                    PIMAGE_THUNK_DATA pAddrThunk = NULL;
 
-                                    for (DWORD dwCount = 0; dwCount < CountRelocs; ++dwCount)
+                                    if (pDescriptor->OriginalFirstThunk)
                                     {
-                                        UINT_PTR* pVal = (UINT_PTR*)((UINT_PTR)LoadedImage.ImageBase + pRelocTable->VirtualAddress + pReloc[dwCount].Offset);
+                                        pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->OriginalFirstThunk);
+                                    }
+                                    else
+                                    {
+                                        pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
+                                    }
 
-                                        switch (pReloc[dwCount].Type)
+                                    pAddrThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
+
+                                    while (pAddrThunk &&
+                                        pThunk &&
+                                        pThunk->u1.AddressOfData &&
+                                        dwStatus == ERROR_SUCCESS)
+                                    {
+                                        if (IMAGE_SNAP_BY_ORDINAL(pThunk->u1.Ordinal))
                                         {
-                                        case IMAGE_REL_BASED_DIR64:
-                                            *pVal += Difference;
-                                            break;
-                                        case IMAGE_REL_BASED_HIGHLOW:
-                                            *pVal += Difference;
-                                            break;
-                                        case IMAGE_REL_BASED_HIGH:
-                                            *pVal += HIWORD(Difference);
-                                            break;
-                                        case IMAGE_REL_BASED_LOW:
-                                            *pVal += LOWORD(Difference);
-                                            break;
+                                            LPCSTR Ordinal = (LPCSTR)IMAGE_ORDINAL(pAddrThunk->u1.Ordinal);
+#if defined(_WIN64)
+                                            pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, Ordinal);
+#else
+                                            pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, Ordinal);
+#endif
                                         }
+                                        else
+                                        {
+                                            PIMAGE_IMPORT_BY_NAME pImport = (PIMAGE_IMPORT_BY_NAME)((UINT_PTR)LoadedImage.ImageBase + pThunk->u1.AddressOfData);
+
+#if defined(_WIN64)
+                                            pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, pImport->Name);
+#else
+                                            pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, pImport->Name);
+#endif
+                                        }
+
+                                        ++pThunk;
+                                        ++pAddrThunk;
                                     }
                                 }
+                                else
+                                {
+                                    dwStatus = ERROR_MOD_NOT_FOUND;
+                                }
 
-                                //next block
-                                pRelocTable = (CONST IMAGE_BASE_RELOCATION*)(((UINT_PTR)pRelocTable) + pRelocTable->SizeOfBlock);
+                                pDescriptor++;
                             }
                         }
                         else
@@ -480,29 +452,85 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                             dwStatus = ERROR_INVALID_DATA;
                         }
                     }
-                }
 
-                if (dwStatus != ERROR_SUCCESS)
-                {
-                   pFunTable->fnVirtualFree(LoadedImage.ImageBase, 
-                                            RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
-                                            MEM_RELEASE);
+                    //fix up relocations
+                    if (dwStatus == ERROR_SUCCESS)
+                    {
+                        CONST DWORD Size = LoadedImage.ImageNTHeaders->OptionalHeader.DataDirectory[ImageDirectory::ENTRY_BASERELOC].Size;
 
-                    pResult->hModule = NULL;
-                    pResult->pEntryPoint = NULL;
-                    pResult->pNTHeaders = NULL;
-                } 
-                else
-                {
-                    pResult->pEntryPoint = (LOADER_FNDLLMAIN)((UINT_PTR)LoadedImage.ImageBase + LoadedImage.ImageNTHeaders->OptionalHeader.AddressOfEntryPoint);
-                    pResult->pNTHeaders = LoadedImage.ImageNTHeaders;
-                    pResult->dwSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage;
+                        if (Size > 0)
+                        {
+                            CONST IMAGE_BASE_RELOCATION* pRelocTable = GetImageDirectory< CONST IMAGE_BASE_RELOCATION* >(LoadedImage, ImageDirectory::ENTRY_BASERELOC);
+
+                            if (pRelocTable)
+                            {
+                                //last entry is empty
+                                while (pRelocTable->SizeOfBlock)
+                                {
+
+                                    CONST DWORD CountRelocs = (pRelocTable->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(RELOCATION);
+
+                                    if (CountRelocs)
+                                    {
+                                        //relocations follow the header
+                                        RELOCATION* pReloc = (RELOCATION*)(pRelocTable + 1);
+                                        CONST UINT_PTR Difference = ((UINT_PTR)LoadedImage.ImageBase - LoadedImage.ImageNTHeaders->OptionalHeader.ImageBase);
+
+                                        for (DWORD dwCount = 0; dwCount < CountRelocs; ++dwCount)
+                                        {
+                                            UINT_PTR* pVal = (UINT_PTR*)((UINT_PTR)LoadedImage.ImageBase + pRelocTable->VirtualAddress + pReloc[dwCount].Offset);
+
+                                            switch (pReloc[dwCount].Type)
+                                            {
+                                            case IMAGE_REL_BASED_DIR64:
+                                                *pVal += Difference;
+                                                break;
+                                            case IMAGE_REL_BASED_HIGHLOW:
+                                                *pVal += Difference;
+                                                break;
+                                            case IMAGE_REL_BASED_HIGH:
+                                                *pVal += HIWORD(Difference);
+                                                break;
+                                            case IMAGE_REL_BASED_LOW:
+                                                *pVal += LOWORD(Difference);
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    //next block
+                                    pRelocTable = (CONST IMAGE_BASE_RELOCATION*)(((UINT_PTR)pRelocTable) + pRelocTable->SizeOfBlock);
+                                }
+                            }
+                            else
+                            {
+                                dwStatus = ERROR_INVALID_DATA;
+                            }
+                        }
+                    }
+
+                    if (dwStatus != ERROR_SUCCESS)
+                    {
+                        pFunTable->fnVirtualFree(LoadedImage.ImageBase,
+                            RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
+                            MEM_RELEASE);
+
+                        pResult->hModule = NULL;
+                        pResult->pEntryPoint = NULL;
+                        pResult->pNTHeaders = NULL;
+                    }
+                    else
+                    {
+                        pResult->pEntryPoint = (LOADER_FNDLLMAIN)((UINT_PTR)LoadedImage.ImageBase + LoadedImage.ImageNTHeaders->OptionalHeader.AddressOfEntryPoint);
+                        pResult->pNTHeaders = LoadedImage.ImageNTHeaders;
+                        pResult->dwSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage;
+                    }
                 }
             }
-        }
-        else
-        {
-            dwStatus = ERROR_OUTOFMEMORY;
+            else
+            {
+                dwStatus = ERROR_OUTOFMEMORY;
+            }
         }
     }
 
@@ -585,3 +613,65 @@ extern "C" FARPROC Loader_GetProcAddress(CONST LOADED_MODULE* pModule, CONST CHA
 
     return pRet;
 }
+
+//64 bit only
+#if defined(_WIN64)
+
+extern "C" DWORD Loader_RegisterExceptionTable(CONST LOADER_FUNCTION_TABLE* pFunTable, CONST LOADED_MODULE* pModule)
+{
+    DWORD dwStatus = ERROR_INVALID_PARAMETER;
+
+    DEBUG_ASSERT(pModule);
+    DEBUG_ASSERT(pModule->dwSize);
+    DEBUG_ASSERT(pModule->hModule);
+    DEBUG_ASSERT(pFunTable);
+    DEBUG_ASSERT(pFunTable->fnRtlAddFunctionTable);
+
+    if (pFunTable &&
+        pFunTable->fnRtlAddFunctionTable &&
+        pModule &&
+        pModule->hModule &&
+        pModule->pNTHeaders &&
+        pModule->dwSize )
+    {
+        IMAGE_INFO Info;
+
+        Info.ImageBase = pModule->hModule;
+        Info.ImageNTHeaders = pModule->pNTHeaders;
+        Info.Size = pModule->dwSize;
+
+        CONST IMAGE_DATA_DIRECTORY* pDir = NULL;
+        CONST IMAGE_RUNTIME_FUNCTION_ENTRY* pExceptionDirectory = GetImageDirectory<CONST IMAGE_RUNTIME_FUNCTION_ENTRY*>(Info, ImageDirectory::ENTRY_EXPORT, &pDir);
+
+        if (pExceptionDirectory)
+        {
+            CONST DWORD Count = (pDir->Size / sizeof(IMAGE_RUNTIME_FUNCTION_ENTRY)) - 1;
+            
+            if (Count)
+            {
+
+                if (pFunTable->fnRtlAddFunctionTable((CONST PRUNTIME_FUNCTION)pExceptionDirectory, Count, (DWORD64)pModule->hModule))
+                {
+                    dwStatus = ERROR_SUCCESS;
+                }
+                else
+                {
+                    dwStatus = S_FALSE;
+                }
+            }
+            else
+            {
+                dwStatus = ERROR_SUCCESS;
+            }
+        }
+        else
+        {
+            //no table
+            dwStatus = ERROR_SUCCESS;
+        }
+    }
+
+    return dwStatus;
+}
+
+#endif

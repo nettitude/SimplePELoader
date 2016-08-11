@@ -45,24 +45,32 @@ extern "C" {
 #endif
 
     /* Function prototypes */
-    typedef LPVOID  ( WINAPI *LOADER_FNVIRTUALALLOC)(LPVOID, SIZE_T, DWORD, DWORD);
-    typedef FARPROC ( WINAPI *LOADER_FNGETPROCADDRESS)(HMODULE, LPCSTR);
-    typedef HMODULE ( WINAPI *LOADER_FNGETMODULEHANDLEA)(LPCSTR);
-    typedef HMODULE ( WINAPI *LOADER_FNLOADLIBRARYA)(LPCSTR);
-    typedef BOOL    ( WINAPI *LOADER_FNVIRTUALFREE)(LPVOID,SIZE_T,DWORD);
+    typedef LPVOID  ( WINAPI *LOADER_FNVIRTUALALLOC)(LPVOID, SIZE_T, DWORD, DWORD);     /* VirtuaAlloc */
+    typedef BOOL    ( WINAPI *LOADER_FNVIRTUALFREE)(LPVOID, SIZE_T, DWORD);             /* VirtuaFree */
+    typedef FARPROC ( WINAPI *LOADER_FNGETPROCADDRESS)(HMODULE, LPCSTR);                /* GetProcAddress */
+    typedef HMODULE ( WINAPI *LOADER_FNGETMODULEHANDLEA)(LPCSTR);                       /* GetModuleHandleA */
+    typedef HMODULE ( WINAPI *LOADER_FNLOADLIBRARYA)(LPCSTR);                           /* LoadLibraryA*/
 
-    typedef BOOL    ( WINAPI *LOADER_FNDLLMAIN)(HINSTANCE hModule, DWORD dwReason, LPVOID);
-
+#if defined(_WIN64)
+    typedef BOOLEAN ( WINAPI *LOADER_RTLADDFUNCTIONTABLE)(PRUNTIME_FUNCTION FunctionTable,DWORD EntryCount, DWORD64 BaseAddress); /* RtlAddFunctionTable */
+#endif
 
     /* Function table */
     typedef struct _LOADER_FUNCTION_TABLE
     {
         LOADER_FNVIRTUALALLOC       fnVirtualAlloc;
+        LOADER_FNVIRTUALFREE        fnVirtualFree;
+
         LOADER_FNGETPROCADDRESS     fnGetProcAddress;
         LOADER_FNGETMODULEHANDLEA   fnGetModuleHandleA;
         LOADER_FNLOADLIBRARYA       fnLoadLibraryA;
-        LOADER_FNVIRTUALFREE        fnVirtualFree;
+
+#if defined(_WIN64)
+        LOADER_RTLADDFUNCTIONTABLE  fnRtlAddFunctionTable;
+#endif
     } LOADER_FUNCTION_TABLE, *PLOADER_FUNCTION_TABLE;
+
+    typedef BOOL(WINAPI *LOADER_FNDLLMAIN)(HINSTANCE hModule, DWORD dwReason, LPVOID); /* DllMain */
 
     typedef struct _LOADED_MODULE
     {
@@ -84,15 +92,31 @@ extern "C" {
         \returns a Windows error code or S_OK on success
      */
 
-    DWORD Loader_LoadFromBuffer(   CONST LOADER_FUNCTION_TABLE* pFunTable,
+    DWORD Loader_LoadFromBuffer(
+                                   CONST LOADER_FUNCTION_TABLE* pFunTable,
                                    CONST LPVOID                 pBuffer, 
                                    DWORD                        cbBuffer,
-                                   LOADED_MODULE*               pResult);
-
+                                   LOADED_MODULE*               pResult
+                               );
 
     /*! \brief Similar to GetProcAddress in the Windows API
     */
-    FARPROC Loader_GetProcAddress(CONST LOADED_MODULE* pModule, CONST CHAR* pszName);
+    FARPROC Loader_GetProcAddress
+                               (
+                                    CONST LOADED_MODULE* pModule, 
+                                    CONST CHAR* pszName
+                               );
+
+
+#if defined(_WIN64)
+    /*! \brief register the excepion table */
+    DWORD Loader_RegisterExceptionTable
+                                (
+                                    CONST LOADER_FUNCTION_TABLE* pFunTable,
+                                    CONST LOADED_MODULE* pModule
+                                );
+#endif
+
 
 #if defined __cplusplus
 }
