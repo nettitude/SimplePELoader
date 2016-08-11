@@ -52,7 +52,7 @@ extern "C" {
     typedef HMODULE ( WINAPI *LOADER_FNLOADLIBRARYA)(LPCSTR);                           /* LoadLibraryA*/
 
 #if defined(_WIN64)
-    typedef BOOLEAN ( WINAPI *LOADER_RTLADDFUNCTIONTABLE)(PRUNTIME_FUNCTION FunctionTable,DWORD EntryCount, DWORD64 BaseAddress); /* RtlAddFunctionTable */
+    typedef BOOLEAN ( NTAPI *LOADER_RTLADDFUNCTIONTABLE)(PRUNTIME_FUNCTION FunctionTable,DWORD EntryCount, DWORD64 BaseAddress); /* RtlAddFunctionTable */
 #endif
 
     /* Function table */
