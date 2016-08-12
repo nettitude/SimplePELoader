@@ -641,7 +641,7 @@ extern "C" DWORD Loader_RegisterExceptionTable(CONST LOADER_FUNCTION_TABLE* pFun
         Info.Size = pModule->dwSize;
 
         CONST IMAGE_DATA_DIRECTORY* pDir = NULL;
-        CONST IMAGE_RUNTIME_FUNCTION_ENTRY* pExceptionDirectory = GetImageDirectory<CONST IMAGE_RUNTIME_FUNCTION_ENTRY*>(Info, ImageDirectory::ENTRY_EXPORT, &pDir);
+        CONST IMAGE_RUNTIME_FUNCTION_ENTRY* pExceptionDirectory = GetImageDirectory<CONST IMAGE_RUNTIME_FUNCTION_ENTRY*>(Info, ImageDirectory::ENTRY_EXCEPTION, &pDir);
 
         if (pExceptionDirectory)
         {
