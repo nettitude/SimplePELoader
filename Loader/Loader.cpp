@@ -280,6 +280,34 @@ static void Loader_CopyMemory(LPVOID pDest, LPCVOID pSrc, SIZE_T cbCopy)
     }
 }
 
+
+static INT Loader_StrCmp(CONST CHAR* pSz1, CONST CHAR* pSz2)
+{
+    DEBUG_ASSERT(pSz1);
+    DEBUG_ASSERT(pSz2);
+
+    while (*pSz1 != 0)
+    {
+        if (*pSz2 == 0)
+            return 1;
+
+        if (*pSz2 > *pSz1)
+            return -1;
+
+        if (*pSz1 > *pSz2)
+            return 1;
+
+        ++pSz1;
+        ++pSz2;
+    }
+
+    if (*pSz2 != 0)
+        return -1;
+
+    return 0;
+
+}
+
 extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
     CONST LPVOID                 pBuffer,
     DWORD                        cbBuffer,
@@ -590,7 +618,7 @@ extern "C" FARPROC Loader_GetProcAddress(CONST LOADED_MODULE* pModule, CONST CHA
                     for (DWORD i = 0; i < pExports->NumberOfNames; ++i)
                     {
                         LPCSTR pszExpName = (LPCSTR)(((UINT_PTR)pModule->hModule + pNames[i]));
-                        if (pszExpName && strcmp(pszExpName, pszName) == 0)
+                        if (pszExpName && Loader_StrCmp(pszExpName, pszName) == 0)
                         {
                             functionIndex = pOrdinals[i];
                             break;
