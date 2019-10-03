@@ -109,7 +109,7 @@ extern "C" {
 
 
 #if defined(_WIN64)
-    /*! \brief register the excepion table */
+    /*! \brief register the exception table */
     DWORD Loader_RegisterExceptionTable
                                 (
                                     CONST LOADER_FUNCTION_TABLE* pFunTable,
