@@ -117,6 +117,13 @@ static DWORD GetNTHeaders(LPVOID pvData, DWORD cbSize, IMAGE_NT_HEADERS** pNTHea
 }
 
 
+static BOOL IsOrdinal(UINT_PTR pvTest)
+{   
+    CONST UINT_PTR MASK = ~(UINT_PTR(0xFFFF));
+    return (pvTest & MASK) == 0 ? TRUE : FALSE;
+}
+
+#define IS_ORDINAL(x) IsOrdinal((UINT_PTR)(x))
 
 struct IMAGE_INFO
 {
@@ -173,21 +180,21 @@ struct ImageDirectory
     enum Enum
     {
 
-        ENTRY_EXPORT = IMAGE_DIRECTORY_ENTRY_EXPORT,        // Export Directory
-        ENTRY_IMPORT = IMAGE_DIRECTORY_ENTRY_IMPORT,        // Import Directory
-        ENTRY_RESOURCE = IMAGE_DIRECTORY_ENTRY_RESOURCE,      // Resource Directory
-        ENTRY_EXCEPTION = IMAGE_DIRECTORY_ENTRY_EXCEPTION,     // Exception Directory
-        ENTRY_SECURITY = IMAGE_DIRECTORY_ENTRY_SECURITY,      // Security Directory
-        ENTRY_BASERELOC = IMAGE_DIRECTORY_ENTRY_BASERELOC,     // Base Relocation Table
-        ENTRY_DEBUG = IMAGE_DIRECTORY_ENTRY_DEBUG,         // Debug Directory
-        ENTRY_ARCHITECTURE = IMAGE_DIRECTORY_ENTRY_ARCHITECTURE,  // Architecture Specific Data
-        ENTRY_GLOBALPTR = IMAGE_DIRECTORY_ENTRY_GLOBALPTR,     // RVA of GP
-        ENTRY_TLS = IMAGE_DIRECTORY_ENTRY_TLS,           // TLS Directory
-        ENTRY_LOAD_CONFIG = IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,   // Load Configuration Directory
-        ENTRY_BOUND_IMPORT = IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT,  // Bound Import Directory in headers
-        ENTRY_IAT = IMAGE_DIRECTORY_ENTRY_IAT,           // Import Address Table
-        ENTRY_DELAY_IMPORT = IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT,  // Delay Load Import Descriptors
-        ENTRY_COM_DESCRIPTOR = IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR,// COM Runtime descriptor
+        ENTRY_EXPORT                = IMAGE_DIRECTORY_ENTRY_EXPORT,        // Export Directory
+        ENTRY_IMPORT                = IMAGE_DIRECTORY_ENTRY_IMPORT,        // Import Directory
+        ENTRY_RESOURCE              = IMAGE_DIRECTORY_ENTRY_RESOURCE,      // Resource Directory
+        ENTRY_EXCEPTION             = IMAGE_DIRECTORY_ENTRY_EXCEPTION,     // Exception Directory
+        ENTRY_SECURITY              = IMAGE_DIRECTORY_ENTRY_SECURITY,      // Security Directory
+        ENTRY_BASERELOC             = IMAGE_DIRECTORY_ENTRY_BASERELOC,     // Base Relocation Table
+        ENTRY_DEBUG                 = IMAGE_DIRECTORY_ENTRY_DEBUG,         // Debug Directory
+        ENTRY_ARCHITECTURE          = IMAGE_DIRECTORY_ENTRY_ARCHITECTURE,  // Architecture Specific Data
+        ENTRY_GLOBALPTR             = IMAGE_DIRECTORY_ENTRY_GLOBALPTR,     // RVA of GP
+        ENTRY_TLS                   = IMAGE_DIRECTORY_ENTRY_TLS,           // TLS Directory
+        ENTRY_LOAD_CONFIG           = IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,   // Load Configuration Directory
+        ENTRY_BOUND_IMPORT          = IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT,  // Bound Import Directory in headers
+        ENTRY_IAT                   = IMAGE_DIRECTORY_ENTRY_IAT,           // Import Address Table
+        ENTRY_DELAY_IMPORT          = IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT,  // Delay Load Import Descriptors
+        ENTRY_COM_DESCRIPTOR        = IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR,// COM Runtime descriptor
     };
 };
 
@@ -366,114 +373,39 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                     {
                         CONST DWORD dwNumSection = RawImage.ImageNTHeaders->FileHeader.NumberOfSections;
 
-                        for (DWORD dwCurrent = 0; dwCurrent < dwNumSection; ++dwCurrent)
-                        {
-                            CONST IMAGE_SECTION_HEADER* pCurrent = &pFirst[dwCurrent];
-                            LPVOID pDest = (LPVOID)((UINT_PTR)pResult->hModule + pCurrent->VirtualAddress);
-                            LPCVOID pSrc = (LPCVOID)((UINT_PTR)RawImage.ImageBase + pCurrent->PointerToRawData);
+                        DEBUG_ASSERT(RawImage.ImageNTHeaders->FileHeader.NumberOfSections);
 
-                            DWORD SectionSize = pCurrent->SizeOfRawData;
-
-                            if (SectionSize == 0)
-                            {
-                                if (pCurrent->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)
-                                {
-                                    SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfInitializedData;
-                                }
-                                else if (pCurrent->Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA)
-                                {
-                                    SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfUninitializedData;
-                                }
-                                else
-                                {
-                                    continue;
-                                }
-                            }
-
-                            Loader_CopyMemory(pDest,
-                                pSrc,
-                                SectionSize);
-
-                        }
-                    }
-                    else
-                    {
-                        dwStatus = ERROR_INVALID_DATA;
-
-                    }
-
-                    //now use the mapped version
-                    dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, dwImageAllocationSize, 0);
-
-
-                    //Load imports
-                    if (dwStatus == ERROR_SUCCESS)
-                    {
-
-                        CONST IMAGE_IMPORT_DESCRIPTOR* pDescriptor = GetImageDirectory< CONST IMAGE_IMPORT_DESCRIPTOR* >(LoadedImage, ImageDirectory::ENTRY_IMPORT);
-
-                        if (pDescriptor)
+                        if (RawImage.ImageNTHeaders->FileHeader.NumberOfSections)
                         {
 
-                            //the final descriptor is a blank entry
-                            while (pDescriptor->Name != NULL &&
-                                   dwStatus == ERROR_SUCCESS)
+                            for (DWORD dwCurrent = 0; dwCurrent < dwNumSection; ++dwCurrent)
                             {
+                                CONST IMAGE_SECTION_HEADER* pCurrent = &pFirst[dwCurrent];
+                                LPVOID pDest = (LPVOID)((UINT_PTR)pResult->hModule + pCurrent->VirtualAddress);
+                                LPCVOID pSrc = (LPCVOID)((UINT_PTR)RawImage.ImageBase + pCurrent->PointerToRawData);
 
-                                LPCSTR szLibraryName = (LPCSTR)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->Name);
-                                HMODULE hLib = pFunTable->fnLoadLibraryA(szLibraryName);
+                                DWORD SectionSize = pCurrent->SizeOfRawData;
 
-                                if (hLib)
+                                if (SectionSize == 0)
                                 {
-                                    PIMAGE_THUNK_DATA pThunk = NULL;
-                                    PIMAGE_THUNK_DATA pAddrThunk = NULL;
-
-                                    if (pDescriptor->OriginalFirstThunk)
+                                    if (pCurrent->Characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA)
                                     {
-                                        pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->OriginalFirstThunk);
+                                        SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfInitializedData;
+                                    }
+                                    else if (pCurrent->Characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA)
+                                    {
+                                        SectionSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfUninitializedData;
                                     }
                                     else
                                     {
-                                        pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
-                                    }
-
-                                    pAddrThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
-
-                                    while (pAddrThunk &&
-                                        pThunk &&
-                                        pThunk->u1.AddressOfData &&
-                                        dwStatus == ERROR_SUCCESS)
-                                    {
-                                        if (IMAGE_SNAP_BY_ORDINAL(pThunk->u1.Ordinal))
-                                        {
-                                            LPCSTR Ordinal = (LPCSTR)IMAGE_ORDINAL(pAddrThunk->u1.Ordinal);
-#if defined(_WIN64)
-                                            pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, Ordinal);
-#else
-                                            pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, Ordinal);
-#endif
-                                        }
-                                        else
-                                        {
-                                            PIMAGE_IMPORT_BY_NAME pImport = (PIMAGE_IMPORT_BY_NAME)((UINT_PTR)LoadedImage.ImageBase + pThunk->u1.AddressOfData);
-
-#if defined(_WIN64)
-                                            pAddrThunk->u1.Function = (ULONGLONG)pFunTable->fnGetProcAddress(hLib, pImport->Name);
-#else
-                                            pAddrThunk->u1.Function = (DWORD)pFunTable->fnGetProcAddress(hLib, pImport->Name);
-#endif
-                                        }
-
-                                        ++pThunk;
-                                        ++pAddrThunk;
+                                        continue;
                                     }
                                 }
-                                else
-                                {
-                                    dwStatus = ERROR_MOD_NOT_FOUND;
-                                }
 
-                                pDescriptor++;
+                                Loader_CopyMemory(pDest,
+                                    pSrc,
+                                    SectionSize);
+
                             }
                         }
                         else
@@ -481,9 +413,86 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                             dwStatus = ERROR_INVALID_DATA;
                         }
                     }
+                    else
+                    {
+                        dwStatus = ERROR_INVALID_DATA;
+                    }
+
+                    if (ERROR_SUCCESS == dwStatus)
+                    {
+                        //now use the mapped version
+                        dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, dwImageAllocationSize, 0);
+
+                        //Load imports
+                        if (dwStatus == ERROR_SUCCESS)
+                        {
+
+                            CONST IMAGE_IMPORT_DESCRIPTOR* pDescriptor = GetImageDirectory< CONST IMAGE_IMPORT_DESCRIPTOR* >(LoadedImage, ImageDirectory::ENTRY_IMPORT);
+
+                            if (pDescriptor)
+                            {
+
+                                //the final descriptor is a blank entry
+                                while (pDescriptor->Name != NULL &&
+                                    dwStatus == ERROR_SUCCESS)
+                                {
+
+                                    LPCSTR szLibraryName = (LPCSTR)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->Name);
+                                    HMODULE hLib = pFunTable->fnLoadLibraryA(szLibraryName);
+
+                                    if (hLib)
+                                    {
+                                        PIMAGE_THUNK_DATA pThunk = NULL;
+                                        PIMAGE_THUNK_DATA pAddrThunk = NULL;
+
+                                        if (pDescriptor->OriginalFirstThunk)
+                                        {
+                                            pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->OriginalFirstThunk);
+                                        }
+                                        else
+                                        {
+                                            pThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
+                                        }
+
+                                        pAddrThunk = (PIMAGE_THUNK_DATA)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->FirstThunk);
+
+                                        while (pAddrThunk &&
+                                            pThunk &&
+                                            pThunk->u1.AddressOfData &&
+                                            dwStatus == ERROR_SUCCESS)
+                                        {
+                                            if (IMAGE_SNAP_BY_ORDINAL(pThunk->u1.Ordinal))
+                                            {
+                                                LPCSTR Ordinal = (LPCSTR)IMAGE_ORDINAL(pAddrThunk->u1.Ordinal);
+                                                pAddrThunk->u1.Function = (UINT_PTR)pFunTable->fnGetProcAddress(hLib, Ordinal);
+                                            }
+                                            else
+                                            {
+                                                PIMAGE_IMPORT_BY_NAME pImport = (PIMAGE_IMPORT_BY_NAME)((UINT_PTR)LoadedImage.ImageBase + pThunk->u1.AddressOfData);
+                                                pAddrThunk->u1.Function = (UINT_PTR)pFunTable->fnGetProcAddress(hLib, pImport->Name);
+                                            }
+
+                                            ++pThunk;
+                                            ++pAddrThunk;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        dwStatus = ERROR_MOD_NOT_FOUND;
+                                    }
+
+                                    pDescriptor++;
+                                }
+                            }
+                            else
+                            {
+                                dwStatus = ERROR_INVALID_DATA;
+                            }
+                        }
+                    }
 
                     //fix up relocations
-                    if (dwStatus == ERROR_SUCCESS)
+                    if (ERROR_SUCCESS == dwStatus)
                     {
                         CONST DWORD Size = LoadedImage.ImageNTHeaders->OptionalHeader.DataDirectory[ImageDirectory::ENTRY_BASERELOC].Size;
 
@@ -563,9 +572,6 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
 
     return dwStatus;
 }
-
-#define IS_ORDINAL_MASK (UINT64( 0xFFFFFFFFFFFF0000 ))
-#define IS_ORDINAL(x) ((((UINT64)x)&IS_ORDINAL_MASK)==0)
 
 
 /*! \brief Similar to GetProcAddress in the Windows API
