@@ -344,10 +344,11 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
 
             if (ERROR_SUCCESS == dwStatus)
             {
-                pResult->hModule = (HMODULE)VirtualAlloc(NULL,
-                                                         RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
-                                                         MEM_RESERVE | MEM_COMMIT,
-                                                         PAGE_EXECUTE_READWRITE);
+                DWORD dwImageAllocationSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage;
+                pResult->hModule = (HMODULE)pFunTable->fnVirtualAlloc( NULL,
+                                                                       dwImageAllocationSize,
+                                                                       MEM_RESERVE | MEM_COMMIT,
+                                                                       PAGE_EXECUTE_READWRITE);
 
                 if (pResult->hModule)
                 {
@@ -402,7 +403,7 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                     }
 
                     //now use the mapped version
-                    dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage, 0);
+                    dwStatus = IMAGE_INFO::Initialise(LoadedImage, (LPVOID)pResult->hModule, dwImageAllocationSize, 0);
 
 
                     //Load imports
@@ -416,7 +417,7 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
 
                             //the final descriptor is a blank entry
                             while (pDescriptor->Name != NULL &&
-                                dwStatus == ERROR_SUCCESS)
+                                   dwStatus == ERROR_SUCCESS)
                             {
 
                                 LPCSTR szLibraryName = (LPCSTR)((UINT_PTR)LoadedImage.ImageBase + pDescriptor->Name);
@@ -511,8 +512,6 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                                             switch (pReloc[dwCount].Type)
                                             {
                                             case IMAGE_REL_BASED_DIR64:
-                                                *pVal += Difference;
-                                                break;
                                             case IMAGE_REL_BASED_HIGHLOW:
                                                 *pVal += Difference;
                                                 break;
@@ -539,9 +538,9 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
 
                     if (dwStatus != ERROR_SUCCESS)
                     {
-                        pFunTable->fnVirtualFree(LoadedImage.ImageBase,
-                            RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage,
-                            MEM_RELEASE);
+                        pFunTable->fnVirtualFree( LoadedImage.ImageBase,
+                                                  dwImageAllocationSize,
+                                                  MEM_RELEASE);
 
                         pResult->hModule = NULL;
                         pResult->pEntryPoint = NULL;
@@ -551,7 +550,7 @@ extern "C" DWORD Loader_LoadFromBuffer(CONST LOADER_FUNCTION_TABLE* pFunTable,
                     {
                         pResult->pEntryPoint = (LOADER_FNDLLMAIN)((UINT_PTR)LoadedImage.ImageBase + LoadedImage.ImageNTHeaders->OptionalHeader.AddressOfEntryPoint);
                         pResult->pNTHeaders = LoadedImage.ImageNTHeaders;
-                        pResult->dwSize = RawImage.ImageNTHeaders->OptionalHeader.SizeOfImage;
+                        pResult->dwSize = dwImageAllocationSize;
                     }
                 }
             }
