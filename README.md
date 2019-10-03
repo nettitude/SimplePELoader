@@ -1,6 +1,6 @@
 # SimplePELoader
 
-A very simple PE loader for loading DLL's into memory without using LoadLibray
+##A very simple PE loader for loading DLL's into memory without using LoadLibrary
 
 
 Copyright (c) 2016, Nettitude
